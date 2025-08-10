@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Motion To MIDI</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #controls-bar { margin-bottom: 20px; }
+        #video-container {
+            position: relative;
+            width: 100%;
+            max-width: 900px;
+            aspect-ratio: 16 / 9;
+            background: #000;
+        }
+        #video {
+            border: 2px solid #333;
+            transition: transform 0.2s;
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: contain;
+        }
+        .roi-overlay { 
+            position: absolute; 
+            border: 2px solid; 
+            background: rgba(255,255,255,0.1); 
+            cursor: move;
+        }
+        .roi-overlay.editing {
+            pointer-events: auto;
+        }
+        .roi-overlay.creating {
+            pointer-events: none;
+        }
+        .roi-handle {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background: white;
+            border: 1px solid #333;
+            cursor: nw-resize;
+        }
+        .roi-handle.nw { top: -4px; left: -4px; cursor: nw-resize; }
+        .roi-handle.ne { top: -4px; right: -4px; cursor: ne-resize; }
+        .roi-handle.sw { bottom: -4px; left: -4px; cursor: sw-resize; }
+        .roi-handle.se { bottom: -4px; right: -4px; cursor: se-resize; }
+        .roi-handle.n { top: -4px; left: 50%; transform: translateX(-50%); cursor: n-resize; }
+        .roi-handle.s { bottom: -4px; left: 50%; transform: translateX(-50%); cursor: s-resize; }
+        .roi-handle.w { top: 50%; left: -4px; transform: translateY(-50%); cursor: w-resize; }
+        .roi-handle.e { top: 50%; right: -4px; transform: translateY(-50%); cursor: e-resize; }
+        .roi-label {
+            position: absolute;
+            top: -20px;
+            left: 0;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 2px 6px;
+            font-size: 12px;
+            border-radius: 3px;
+        }
+        .roi-controls { margin: 10px 0; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        .roi-controls h3 { margin-top: 0; }
+        .roi-button { margin: 5px; padding: 8px 12px; cursor: pointer; border: none; border-radius: 3px; }
+        .roi-button.active { background: #007bff; color: white; }
+        .roi-button.inactive { background: #f8f9fa; color: #333; }
+        .roi-button.edit { background: #28a745; color: white; }
+        .motion-status { margin: 10px 0; padding: 10px; border-radius: 5px; }
+        .motion-detected { background: #d4edda; color: #155724; }
+        .no-motion { background: #f8d7da; color: #721c24; }
+        .file-upload { margin: 10px 0; }
+        .sound-info { font-size: 12px; color: #666; margin-top: 5px; }
+        .sound-controls { display: flex; align-items: center; gap: 10px; margin-top: 5px; }
+        .remove-sound-btn { 
+            background: #dc3545; 
+            color: white; 
+            border: none; 
+            padding: 4px 8px; 
+            border-radius: 3px; 
+            cursor: pointer; 
+            font-size: 12px;
+        }
+        .remove-sound-btn:hover { background: #c82333; }
+        .remove-sound-btn:disabled { 
+            background: #6c757d; 
+            cursor: not-allowed; 
+        }
+        .midi-control { margin: 10px 0; }
+        .midi-control label { display: inline-block; width: 80px; }
+        .midi-note-dropdown { padding: 5px; margin-left: 10px; }
+        .play-mode-control { margin: 10px 0; }
+        .play-mode-toggle {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        .play-mode-toggle.restart { background: #28a745; }
+        .play-mode-toggle.finish { background: #ffc107; color: #212529; }
+        #flip-btn.active { background: #007bff; color: white; }
+        #play-mode-toggle { 
+            background: #28a745; 
+            color: white; 
+            margin-left: 10px; 
+            padding: 8px 12px; 
+            border: none; 
+            border-radius: 3px; 
+            cursor: pointer;
+        }
+        #play-mode-toggle.single { background: #dc3545; }
+        .edit-mode-info {
+            background: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        /* Fullscreen styles */
+        #video-container:fullscreen,
+        #video-container:-webkit-full-screen,
+        #video-container:-ms-fullscreen {
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: none !important;
+            aspect-ratio: auto !important;
+            background: #000;
+        }
+        #video-container:fullscreen #video,
+        #video-container:-webkit-full-screen #video,
+        #video-container:-ms-fullscreen #video {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: contain;
+        }
+
+        #fullscreen-btn {
+            margin-left: 10px;
+            background: #343a40;
+            color: #fff;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Camera Motion to MIDI Controller</h1>
+    <div id="controls-bar">
+        <label for="camera-select">Camera:</label>
+        <select id="camera-select"></select>
+        <button id="start-btn">Start Camera</button>
+        <button id="stop-btn" disabled>Stop Camera</button>
+        <button id="flip-btn">Flip Image</button>
+        <button id="play-mode-toggle" onclick="toggleSimultaneousPlay()">Simultaneous Play</button>
+        <button id="fullscreen-btn" type="button">Enter Fullscreen</button>
+    </div>
+    <div id="video-container">
+        <video id="video" autoplay></video>
+        <canvas id="canvas" style="display: none;"></canvas>
+    </div>
+    <div id="edit-mode-info" class="edit-mode-info" style="display: none;">
+        <strong>Edit Mode Active:</strong> Drag to move ROI, drag handles to resize. Click outside ROI or press Escape to finish editing.
+    </div>
+    <div id="roi-controls">
+        <h3>ROI Controls</h3>
+        <div id="roi-buttons"></div>
+        <button onclick="clearAllROIs()">Clear All ROIs</button>
+    </div>
+    <div id="motion-status"></div>
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const videoContainer = document.getElementById('video-container');
+        const cameraSelect = document.getElementById('camera-select');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const flipBtn = document.getElementById('flip-btn');
+
+        // Fullscreen helpers
+        function isFullscreen() {
+            return document.fullscreenElement === videoContainer ||
+                   document.webkitFullscreenElement === videoContainer ||
+                   document.msFullscreenElement === videoContainer;
+        }
+        async function enterFullscreen() {
+            try {
+                if (videoContainer.requestFullscreen) await videoContainer.requestFullscreen();
+                else if (videoContainer.webkitRequestFullscreen) await videoContainer.webkitRequestFullscreen();
+                else if (videoContainer.msRequestFullscreen) await videoContainer.msRequestFullscreen();
+            } catch (e) { console.warn('Fullscreen request failed:', e); }
+        }
+        async function exitFullscreen() {
+            try {
+                if (document.exitFullscreen) await document.exitFullscreen();
+                else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+                else if (document.msExitFullscreen) await document.msExitFullscreen();
+            } catch (e) { console.warn('Exit fullscreen failed:', e); }
+        }
+        function updateFullscreenButton() {
+            const btn = document.getElementById('fullscreen-btn');
+            if (btn) btn.textContent = isFullscreen() ? 'Exit Fullscreen' : 'Enter Fullscreen';
+        }
+
+        // Wire up the button and listen for fullscreen changes
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
+        if (fullscreenBtn) {
+            fullscreenBtn.addEventListener('click', async () => {
+                if (isFullscreen()) {
+                    await exitFullscreen();
+                } else {
+                    await enterFullscreen();
+                }
+                updateFullscreenButton();
+            });
+        }
+        ['fullscreenchange','webkitfullscreenchange','msfullscreenchange'].forEach(evt => {
+            document.addEventListener(evt, updateFullscreenButton);
+        });
+
+        let isDrawing = false;
+        let isEditing = false;
+        let isResizing = false;
+        let isDragging = false;
+        let startX, startY;
+        let activeROIId = null;
+        let editingROIId = null;
+        let resizeHandle = null;
+        let dragOffset = { x: 0, y: 0 };
+        let roiOverlays = {};
+        let soundFiles = {};
+        let midiNotes = {};
+        let playModes = {};
+        let currentAudio = {}; // Track currently playing audio for each ROI
+        let stream = null;
+        let currentDeviceId = null;
+        let isFlipped = false;
+        let motionDetectionInterval = null;
+        let simultaneousPlay = true;
+
+        const roiColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ffa500', '#800080'];
+
+        // Simultaneous play toggle
+        function toggleSimultaneousPlay() {
+            simultaneousPlay = !simultaneousPlay;
+            const button = document.getElementById('play-mode-toggle');
+            button.textContent = simultaneousPlay ? 'Simultaneous Play' : 'Single Play';
+            button.className = simultaneousPlay ? '' : 'single';
+            
+            fetch('/set_simultaneous_play', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ simultaneous_play: simultaneousPlay })
+            });
+        }
+
+        function loadSimultaneousPlay() {
+            fetch('/get_simultaneous_play')
+                .then(response => response.json())
+                .then(data => {
+                    simultaneousPlay = data.simultaneous_play;
+                    const button = document.getElementById('play-mode-toggle');
+                    button.textContent = simultaneousPlay ? 'Simultaneous Play' : 'Single Play';
+                    button.className = simultaneousPlay ? '' : 'single';
+                });
+        }
+
+        // Camera controls
+        async function getCameras() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            cameraSelect.innerHTML = '';
+            devices.filter(d => d.kind === 'videoinput').forEach((device, idx) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.text = device.label || `Camera ${idx+1}`;
+                cameraSelect.appendChild(option);
+            });
+        }
+
+        async function startCamera(deviceId) {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        deviceId: deviceId ? { exact: deviceId } : undefined,
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                        aspectRatio: 16/9
+                    }
+                });
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    loadExistingROIs(); // Load existing ROIs when camera starts
+                };
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                cameraSelect.disabled = true;
+                if (!motionDetectionInterval) startMotionDetection();
+            } catch (err) {
+                alert('Could not start camera: ' + err);
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            cameraSelect.disabled = false;
+            if (motionDetectionInterval) {
+                clearInterval(motionDetectionInterval);
+                motionDetectionInterval = null;
+            }
+        }
+
+        cameraSelect.addEventListener('change', () => {
+            currentDeviceId = cameraSelect.value;
+            if (stream) startCamera(currentDeviceId);
+        });
+
+        startBtn.addEventListener('click', () => {
+            currentDeviceId = cameraSelect.value;
+            startCamera(currentDeviceId);
+        });
+
+        stopBtn.addEventListener('click', () => {
+            stopCamera();
+        });
+
+        // Flip camera image
+        flipBtn.addEventListener('click', () => {
+            isFlipped = !isFlipped;
+            video.style.transform = isFlipped ? 'scaleX(-1)' : '';
+            flipBtn.classList.toggle('active', isFlipped);
+        });
+
+        // Load existing ROIs from server
+        function loadExistingROIs() {
+            fetch('/get_roi_list')
+                .then(response => response.json())
+                .then(data => {
+                    const roiList = data.roi_list;
+                    Object.keys(roiList).forEach(roiId => {
+                        const coords = roiList[roiId];
+                        if (coords) {
+                            updateROIOverlay(parseInt(roiId), coords.x1, coords.y1, coords.x2, coords.y2, false);
+                        }
+                    });
+                });
+        }
+
+        // Play mode toggle function
+        function togglePlayMode(roiId) {
+            const currentMode = playModes[roiId] || 'restart';
+            const newMode = currentMode === 'restart' ? 'finish' : 'restart';
+            playModes[roiId] = newMode;
+            
+            // Update button appearance
+            const button = document.getElementById(`play-mode-${roiId}`);
+            button.textContent = newMode === 'restart' ? 'Mode: Restart' : 'Mode: Finish';
+            button.className = `play-mode-toggle ${newMode}`;
+            
+            // Send to server
+            fetch('/set_play_mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ roi_id: roiId.toString(), play_mode: newMode })
+            });
+        }
+
+        function loadPlayModes() {
+            fetch('/get_play_modes')
+                .then(response => response.json())
+                .then(modes => {
+                    playModes = modes;
+                    Object.keys(modes).forEach(roiId => {
+                        const mode = modes[roiId];
+                        const button = document.getElementById(`play-mode-${roiId}`);
+                        if (button) {
+                            button.textContent = mode === 'restart' ? 'Mode: Restart' : 'Mode: Finish';
+                            button.className = `play-mode-toggle ${mode}`;
+                        }
+                    });
+                });
+        }
+
+        // ROI controls
+        function initializeROIButtons() {
+            const buttonsContainer = document.getElementById('roi-buttons');
+            for (let i = 1; i <= 8; i++) {
+                const roiDiv = document.createElement('div');
+                roiDiv.className = 'roi-controls';
+                roiDiv.innerHTML = `
+                    <h4>ROI ${i}</h4>
+                    <button class="roi-button inactive" onclick="selectROI(${i})" id="roi-btn-${i}">
+                        Create ROI ${i}
+                    </button>
+                    <button class="roi-button edit" onclick="editROI(${i})" id="edit-btn-${i}" style="display: none;">
+                        Edit ROI ${i}
+                    </button>
+                    <button onclick="clearROI(${i})">Clear ROI ${i}</button>
+                    <div class="midi-control">
+                        <label for="midi-note-${i}">MIDI Note:</label>
+                        <select class="midi-note-dropdown" id="midi-note-${i}">
+                            ${[...Array(88)].map((_, idx) => {
+                                const note = idx + 21;
+                                return `<option value="${note}">MIDI ${note}</option>`;
+                            }).join('')}
+                        </select>
+                    </div>
+                    <div class="play-mode-control">
+                        <label>Play Mode:</label>
+                        <button class="play-mode-toggle restart" id="play-mode-${i}" onclick="togglePlayMode(${i})">
+                            Mode: Restart
+                        </button>
+                        <small style="display: block; margin-top: 5px; color: #666;">
+                            Restart: Retrigger immediately | Finish: Wait for completion
+                        </small>
+                    </div>
+                    <div class="file-upload">
+                        <input type="file" id="sound-${i}" accept="audio/*" onchange="uploadSound(${i})">
+                        <label for="sound-${i}">Upload Sound for ROI ${i}</label>
+                        <div class="sound-info" id="sound-info-${i}">No sound file uploaded</div>
+                        <div class="sound-controls">
+                            <button class="remove-sound-btn" id="remove-sound-${i}" onclick="removeSoundFile(${i})" disabled>
+                                Remove Sound
+                            </button>
+                        </div>
+                    </div>
+                `;
+                buttonsContainer.appendChild(roiDiv);
+            }
+            
+            // Add event listeners for MIDI note dropdowns
+            for (let i = 1; i <= 8; i++) {
+                document.getElementById(`midi-note-${i}`).addEventListener('change', function() {
+                    const midiNote = this.value;
+                    fetch('/set_midi_note', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ roi_id: i.toString(), midi_note: midiNote })
+                    });
+                });
+            }
+            
+            loadSoundFiles();
+            loadMidiNotes();
+            loadPlayModes();
+        }
+
+        function selectROI(roiId) {
+            if (isEditing) {
+                finishEditing();
+            }
+            
+            for (let i = 1; i <= 8; i++) {
+                document.getElementById(`roi-btn-${i}`).className = 'roi-button inactive';
+            }
+            document.getElementById(`roi-btn-${roiId}`).className = 'roi-button active';
+            activeROIId = roiId;
+        }
+
+        function editROI(roiId) {
+            if (isEditing) {
+                finishEditing();
+            }
+            
+            if (!roiOverlays[roiId]) {
+                alert(`ROI ${roiId} doesn't exist. Create it first.`);
+                return;
+            }
+            
+            isEditing = true;
+            editingROIId = roiId;
+            activeROIId = null;
+            
+            // Show edit mode info
+            document.getElementById('edit-mode-info').style.display = 'block';
+            
+            // Make the ROI overlay editable
+            const overlay = roiOverlays[roiId];
+            overlay.className = 'roi-overlay editing';
+            
+            // Add resize handles
+            addResizeHandles(overlay);
+            
+            // Update button states
+            for (let i = 1; i <= 8; i++) {
+                document.getElementById(`roi-btn-${i}`).className = 'roi-button inactive';
+                document.getElementById(`edit-btn-${i}`).className = 'roi-button edit';
+            }
+            document.getElementById(`edit-btn-${roiId}`).className = 'roi-button edit active';
+        }
+
+        function finishEditing() {
+            if (!isEditing) return;
+            
+            isEditing = false;
+            isResizing = false;
+            isDragging = false;
+            
+            // Hide edit mode info
+            document.getElementById('edit-mode-info').style.display = 'none';
+            
+            if (editingROIId && roiOverlays[editingROIId]) {
+                const overlay = roiOverlays[editingROIId];
+                overlay.className = 'roi-overlay';
+                
+                // Remove resize handles
+                removeResizeHandles(overlay);
+                
+                // Save the current position
+                saveROIPosition(editingROIId);
+            }
+            
+            editingROIId = null;
+            
+            // Reset button states
+            for (let i = 1; i <= 8; i++) {
+                document.getElementById(`roi-btn-${i}`).className = 'roi-button inactive';
+                document.getElementById(`edit-btn-${i}`).className = 'roi-button edit';
+            }
+        }
+
+        function addResizeHandles(overlay) {
+            const handles = ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'];
+            handles.forEach(handle => {
+                const handleDiv = document.createElement('div');
+                handleDiv.className = `roi-handle ${handle}`;
+                handleDiv.dataset.handle = handle;
+                overlay.appendChild(handleDiv);
+            });
+        }
+
+        function removeResizeHandles(overlay) {
+            const handles = overlay.querySelectorAll('.roi-handle');
+            handles.forEach(handle => handle.remove());
+        }
+
+        function saveROIPosition(roiId) {
+            const overlay = roiOverlays[roiId];
+            if (!overlay) return;
+            
+            const rect = videoContainer.getBoundingClientRect();
+            const overlayRect = overlay.getBoundingClientRect();
+            
+            const x1 = ((overlayRect.left - rect.left) / rect.width) * 100;
+            const y1 = ((overlayRect.top - rect.top) / rect.height) * 100;
+            const x2 = x1 + (overlayRect.width / rect.width) * 100;
+            const y2 = y1 + (overlayRect.height / rect.height) * 100;
+            
+            const roiCoords = { x1, y1, x2, y2 };
+            
+            fetch('/update_roi', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roi_id: roiId.toString(),
+                    roi_coords: roiCoords
+                })
+            });
+        }
+
+        function clearROI(roiId) {
+            if (editingROIId === roiId) {
+                finishEditing();
+            }
+            
+            fetch('/clear_roi', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ roi_id: roiId.toString() })
+            });
+            if (roiOverlays[roiId]) {
+                roiOverlays[roiId].remove();
+                delete roiOverlays[roiId];
+            }
+            
+            // Update button visibility
+            document.getElementById(`edit-btn-${roiId}`).style.display = 'none';
+            document.getElementById(`roi-btn-${roiId}`).textContent = `Create ROI ${roiId}`;
+        }
+
+        function clearAllROIs() {
+            if (isEditing) {
+                finishEditing();
+            }
+            
+            fetch('/clear_roi', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            Object.values(roiOverlays).forEach(overlay => overlay.remove());
+            roiOverlays = {};
+            
+            // Update all button visibility
+            for (let i = 1; i <= 8; i++) {
+                document.getElementById(`edit-btn-${i}`).style.display = 'none';
+                document.getElementById(`roi-btn-${i}`).textContent = `Create ROI ${i}`;
+            }
+        }
+
+        function uploadSound(roiId) {
+            const fileInput = document.getElementById(`sound-${roiId}`);
+            const file = fileInput.files[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('sound_file', file);
+            formData.append('roi_id', roiId.toString());
+            fetch('/upload_sound', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateSoundInfo(roiId, file.name, true);
+                    soundFiles[roiId] = data.filename;
+                } else {
+                    alert('Error uploading sound file');
+                }
+            });
+        }
+
+        // Remove sound file from ROI
+        function removeSoundFile(roiId) {
+            if (!soundFiles[roiId]) {
+                alert('No sound file to remove for this ROI');
+                return;
+            }
+            
+            if (confirm(`Are you sure you want to remove the sound file for ROI ${roiId}?`)) {
+                fetch('/remove_sound', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        roi_id: roiId.toString()
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log(`Sound file removed for ROI ${roiId}`);
+                        updateSoundInfo(roiId, 'No sound file uploaded', false);
+                        delete soundFiles[roiId];
+                        // Clear the file input
+                        document.getElementById(`sound-${roiId}`).value = '';
+                    } else {
+                        console.error('Error removing sound file:', data.error);
+                        alert('Error removing sound file: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error removing sound file');
+                });
+            }
+        }
+
+        function updateSoundInfo(roiId, text, hasSound) {
+            document.getElementById(`sound-info-${roiId}`).textContent = text;
+            document.getElementById(`remove-sound-${roiId}`).disabled = !hasSound;
+        }
+
+        function loadSoundFiles() {
+            fetch('/get_sound_files')
+                .then(response => response.json())
+                .then(files => {
+                    soundFiles = files;
+                    // Update UI for all ROIs
+                    for (let i = 1; i <= 8; i++) {
+                        if (files[i]) {
+                            const filename = files[i];
+                            updateSoundInfo(i, `Uploaded: ${filename}`, true);
+                        } else {
+                            updateSoundInfo(i, 'No sound file uploaded', false);
+                        }
+                    }
+                });
+        }
+
+        function loadMidiNotes() {
+            fetch('/get_midi_notes')
+                .then(response => response.json())
+                .then(notes => {
+                    midiNotes = notes;
+                    Object.keys(notes).forEach(roiId => {
+                        const midiNote = notes[roiId];
+                        document.getElementById(`midi-note-${roiId}`).value = midiNote;
+                    });
+                });
+        }
+
+        // Mouse events for ROI creation and editing
+        videoContainer.addEventListener('mousedown', (e) => {
+            if (isEditing && editingROIId) {
+                const overlay = roiOverlays[editingROIId];
+                const target = e.target;
+                
+                if (target.classList.contains('roi-handle')) {
+                    // Start resizing
+                    isResizing = true;
+                    resizeHandle = target.dataset.handle;
+                    e.preventDefault();
+                    return;
+                } else if (target === overlay) {
+                    // Start dragging
+                    isDragging = true;
+                    const rect = videoContainer.getBoundingClientRect();
+                    const overlayRect = overlay.getBoundingClientRect();
+                    dragOffset.x = e.clientX - overlayRect.left;
+                    dragOffset.y = e.clientY - overlayRect.top;
+                    e.preventDefault();
+                    return;
+                }
+            }
+            
+            if (!activeROIId || isEditing) return;
+            
+            // Start creating new ROI
+            isDrawing = true;
+            const rect = video.getBoundingClientRect();
+            startX = ((e.clientX - rect.left) / rect.width) * 100;
+            startY = ((e.clientY - rect.top) / rect.height) * 100;
+        });
+
+        videoContainer.addEventListener('mousemove', (e) => {
+            if (isResizing && editingROIId) {
+                handleResize(e);
+                return;
+            }
+            
+            if (isDragging && editingROIId) {
+                handleDrag(e);
+                return;
+            }
+            
+            if (!isDrawing || !activeROIId) return;
+            
+            const rect = video.getBoundingClientRect();
+            const currentX = ((e.clientX - rect.left) / rect.width) * 100;
+            const currentY = ((e.clientY - rect.top) / rect.height) * 100;
+            updateROIOverlay(activeROIId, startX, startY, currentX, currentY, true);
+        });
+
+        videoContainer.addEventListener('mouseup', (e) => {
+            if (isResizing) {
+                isResizing = false;
+                resizeHandle = null;
+                saveROIPosition(editingROIId);
+                return;
+            }
+            
+            if (isDragging) {
+                isDragging = false;
+                saveROIPosition(editingROIId);
+                return;
+            }
+            
+            if (!isDrawing || !activeROIId) return;
+            
+            isDrawing = false;
+            const rect = video.getBoundingClientRect();
+            const endX = ((e.clientX - rect.left) / rect.width) * 100;
+            const endY = ((e.clientY - rect.top) / rect.height) * 100;
+            const roiCoords = {
+                x1: Math.min(startX, endX),
+                y1: Math.min(startY, endY),
+                x2: Math.max(startX, endX),
+                y2: Math.max(startY, endY)
+            };
+            
+            fetch('/update_roi', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roi_id: activeROIId.toString(),
+                    roi_coords: roiCoords
+                })
+            });
+            
+            // Update button states
+            document.getElementById(`roi-btn-${activeROIId}`).className = 'roi-button inactive';
+            document.getElementById(`roi-btn-${activeROIId}`).textContent = `ROI ${activeROIId} Created`;
+            document.getElementById(`edit-btn-${activeROIId}`).style.display = 'inline-block';
+            
+            activeROIId = null;
+        });
+
+        // Click outside to finish editing
+        document.addEventListener('click', (e) => {
+            if (isEditing && !videoContainer.contains(e.target) && !e.target.closest('.roi-controls')) {
+                finishEditing();
+            }
+        });
+
+        // Escape key to finish editing
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && isEditing) {
+                finishEditing();
+            }
+        });
+
+        function handleResize(e) {
+            const overlay = roiOverlays[editingROIId];
+            const containerRect = videoContainer.getBoundingClientRect();
+            const overlayRect = overlay.getBoundingClientRect();
+            
+            const mouseX = e.clientX;
+            const mouseY = e.clientY;
+            
+            let newLeft = overlayRect.left - containerRect.left;
+            let newTop = overlayRect.top - containerRect.top;
+            let newWidth = overlayRect.width;
+            let newHeight = overlayRect.height;
+            
+            switch (resizeHandle) {
+                case 'nw':
+                    newWidth = overlayRect.right - mouseX;
+                    newHeight = overlayRect.bottom - mouseY;
+                    newLeft = mouseX - containerRect.left;
+                    newTop = mouseY - containerRect.top;
+                    break;
+                case 'ne':
+                    newWidth = mouseX - overlayRect.left;
+                    newHeight = overlayRect.bottom - mouseY;
+                    newTop = mouseY - containerRect.top;
+                    break;
+                case 'sw':
+                    newWidth = overlayRect.right - mouseX;
+                    newHeight = mouseY - overlayRect.top;
+                    newLeft = mouseX - containerRect.left;
+                    break;
+                case 'se':
+                    newWidth = mouseX - overlayRect.left;
+                    newHeight = mouseY - overlayRect.top;
+                    break;
+                case 'n':
+                    newHeight = overlayRect.bottom - mouseY;
+                    newTop = mouseY - containerRect.top;
+                    break;
+                case 's':
+                    newHeight = mouseY - overlayRect.top;
+                    break;
+                case 'w':
+                    newWidth = overlayRect.right - mouseX;
+                    newLeft = mouseX - containerRect.left;
+                    break;
+                case 'e':
+                    newWidth = mouseX - overlayRect.left;
+                    break;
+            }
+            
+            // Ensure minimum size and bounds
+            newWidth = Math.max(20, newWidth);
+            newHeight = Math.max(20, newHeight);
+            newLeft = Math.max(0, Math.min(newLeft, containerRect.width - newWidth));
+            newTop = Math.max(0, Math.min(newTop, containerRect.height - newHeight));
+            
+            // Convert to percentages
+            const leftPercent = (newLeft / containerRect.width) * 100;
+            const topPercent = (newTop / containerRect.height) * 100;
+            const widthPercent = (newWidth / containerRect.width) * 100;
+            const heightPercent = (newHeight / containerRect.height) * 100;
+            
+            overlay.style.left = leftPercent + '%';
+            overlay.style.top = topPercent + '%';
+            overlay.style.width = widthPercent + '%';
+            overlay.style.height = heightPercent + '%';
+        }
+
+        function handleDrag(e) {
+            const overlay = roiOverlays[editingROIId];
+            const containerRect = videoContainer.getBoundingClientRect();
+            
+            let newLeft = e.clientX - containerRect.left - dragOffset.x;
+            let newTop = e.clientY - containerRect.top - dragOffset.y;
+            
+            // Ensure bounds
+            const overlayRect = overlay.getBoundingClientRect();
+            newLeft = Math.max(0, Math.min(newLeft, containerRect.width - overlayRect.width));
+            newTop = Math.max(0, Math.min(newTop, containerRect.height - overlayRect.height));
+            
+            // Convert to percentages
+            const leftPercent = (newLeft / containerRect.width) * 100;
+            const topPercent = (newTop / containerRect.height) * 100;
+            
+            overlay.style.left = leftPercent + '%';
+            overlay.style.top = topPercent + '%';
+        }
+
+        function updateROIOverlay(roiId, x1, y1, x2, y2, isCreating = false) {
+            if (roiOverlays[roiId]) {
+                roiOverlays[roiId].remove();
+            }
+            const overlay = document.createElement('div');
+            overlay.className = isCreating ? 'roi-overlay creating' : 'roi-overlay';
+            overlay.style.left = Math.min(x1, x2) + '%';
+            overlay.style.top = Math.min(y1, y2) + '%';
+            overlay.style.width = Math.abs(x2 - x1) + '%';
+            overlay.style.height = Math.abs(y2 - y1) + '%';
+            overlay.style.borderColor = roiColors[(roiId - 1) % roiColors.length];
+            
+            // Add label
+            const label = document.createElement('div');
+            label.className = 'roi-label';
+            label.textContent = `ROI ${roiId}`;
+            overlay.appendChild(label);
+            
+            videoContainer.appendChild(overlay);
+            roiOverlays[roiId] = overlay;
+        }
+
+        function playSound(filename, roiId) {
+            const playMode = playModes[roiId] || 'restart';
+            
+            // In single play mode, stop all other currently playing audio
+            if (!simultaneousPlay) {
+                Object.keys(currentAudio).forEach(otherRoiId => {
+                    if (otherRoiId != roiId && currentAudio[otherRoiId] && !currentAudio[otherRoiId].paused) {
+                        currentAudio[otherRoiId].pause();
+                        currentAudio[otherRoiId].currentTime = 0;
+                        currentAudio[otherRoiId] = null;
+                        console.log(`Stopped audio for ROI ${otherRoiId} due to single play mode`);
+                    }
+                });
+            }
+            
+            // If in restart mode, stop current audio if playing
+            if (playMode === 'restart' && currentAudio[roiId]) {
+                currentAudio[roiId].pause();
+                currentAudio[roiId].currentTime = 0;
+            }
+            
+            // If in finish mode and audio is already playing, don't start new one
+            if (playMode === 'finish' && currentAudio[roiId] && !currentAudio[roiId].paused) {
+                return;
+            }
+            
+            const audio = new Audio(`/static/${filename}`);
+            currentAudio[roiId] = audio;
+            
+            audio.addEventListener('ended', () => {
+                // Notify server that sound finished
+                fetch('/sound_finished', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ roi_id: roiId.toString() })
+                });
+                currentAudio[roiId] = null;
+            });
+            
+            audio.play().catch(e => console.log('Error playing sound:', e));
+        }
+
+        function startMotionDetection() {
+            if (motionDetectionInterval) clearInterval(motionDetectionInterval);
+            motionDetectionInterval = setInterval(() => {
+                if (!stream) return;
+                ctx.save();
+                if (isFlipped) {
+                    ctx.translate(canvas.width, 0);
+                    ctx.scale(-1, 1);
+                }
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                ctx.restore();
+                const imageData = canvas.toDataURL('image/jpeg', 0.8);
+                fetch('/detect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: imageData })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    updateMotionStatus(data.motion_results);
+                });
+            }, 500);
+        }
+
+        function updateMotionStatus(motionResults) {
+            const statusDiv = document.getElementById('motion-status');
+            let statusHTML = '<h3>Motion Status</h3>';
+            Object.keys(motionResults).forEach(roiId => {
+                const result = motionResults[roiId];
+                const statusClass = result.motion ? 'motion-detected' : 'no-motion';
+                const statusText = result.motion ? 'MOTION DETECTED' : 'No Motion';
+                const midiInfo = result.midi_note ? ` | MIDI: ${result.midi_note}` : '';
+                const modeInfo = result.play_mode ? ` | Mode: ${result.play_mode}` : '';
+                const triggerInfo = result.should_trigger ? ' | TRIGGERED' : '';
+                const playModeInfo = simultaneousPlay ? ' | Simultaneous' : ' | Single';
+                statusHTML += `
+                    <div class="motion-status ${statusClass}">
+                        ROI ${roiId}: ${statusText} (Area: ${result.motion_area})${midiInfo}${modeInfo}${triggerInfo}${playModeInfo}
+                    </div>
+                `;
+                if (result.should_trigger && result.sound_file) {
+                    playSound(result.sound_file, roiId);
+                }
+            });
+            statusDiv.innerHTML = statusHTML;
+        }
+
+        // On load
+        (async function() {
+            await getCameras();
+            initializeROIButtons();
+            loadSimultaneousPlay();
+            updateFullscreenButton(); // initialize button text
+            // Optionally auto-start camera
+            // startCamera(cameraSelect.value);
+        })();
+    </script>
+</body>
+</html>
